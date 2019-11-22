@@ -1,0 +1,221 @@
+module mojo_top (
+    input clk,              // 50MHz clock
+    input rst_n,            // reset button (active low)
+    output led [8],         // 8 user controllable LEDs
+    input cclk,             // configuration clock, AVR ready when high
+    output spi_miso,        // AVR SPI MISO
+    input spi_ss,           // AVR SPI Slave Select
+    input spi_mosi,         // AVR SPI MOSI
+    input spi_sck,          // AVR SPI Clock
+    output spi_channel [4], // AVR general purpose pins (used by default to select ADC channel)
+    input avr_tx,           // AVR TX (FPGA RX)
+    output avr_rx,          // AVR RX (FPGA TX)
+    input avr_rx_busy,      // AVR RX buffer full
+    output io_led [3][8],   // LEDs on IO Shield
+    output io_seg [8],      // 7-segment LEDs on IO Shield
+    output io_sel [4],      // Digit select on IO Shield
+    input io_button [5],    // 5 buttons on IO Shield
+    input io_dip [3][8]     // DIP switches on IO Shield
+  ) {
+  
+  sig rst;                  // reset signal
+  
+  .clk(clk) {
+    // The reset conditioner is used to synchronize the reset signal to the FPGA
+    // clock. This ensures the entire FPGA comes out of reset at the same time.
+    reset_conditioner reset_cond;
+    
+    .rst(rst){
+      /*
+      USING DFF TO STORE "PERSISTENT" DATA
+      */
+      dff player_pos [3][8](#INIT(8b10000000));
+      dff row_selector [2](#INIT(2b00));
+      
+    }
+    
+  }
+  /*
+  DEBOUNCER LOGIC
+  */
+  edge_detector up(.clk(clk), #RISE(1), #FALL(0));
+  edge_detector down(.clk(clk), #RISE(1), #FALL(0));
+  edge_detector left(.clk(clk), #RISE(1), #FALL(0));
+  edge_detector right(.clk(clk), #RISE(1), #FALL(0));
+  button_conditioner upb(.clk(clk));
+  button_conditioner downb(.clk(clk));
+  button_conditioner leftb(.clk(clk));
+  button_conditioner rightb(.clk(clk));
+  
+  
+  /*
+  IMPORTANT NOTE:
+  USING A 'sig' AS A INTERMEDIATE TO DO MATHEMATICAL OPERATIONS/FUNCTIONS
+  INSTEAD OF USING A 'dff', AS IT WILL RESULT IN YOU NEEDING 1 MORE CLOCK CYCLE 
+  SO IN THIS SCENARIO IF YOU USE A 'dff' AS AN INTERMEDIATE FOR THE CALCULATION 
+  YOU WILL HAVE A "bug" WHERE YOU NEED TO PRESS LEFT/RIGHT TWO TIMES IN ORDER TO 
+  SHIFT BY 1 BIT
+  */
+  sig checker [8];
+  
+  always {
+    reset_cond.in = ~rst_n; // input raw inverted reset signal
+    rst = reset_cond.out;   // conditioned reset
+    
+    led = 8h00;             // turn LEDs off
+    spi_miso = bz;          // not using SPI
+    spi_channel = bzzzz;    // not using flags
+    avr_rx = bz;            // not using serial port
+    
+    io_led = 3x{{8h00}};    // turn LEDs off
+    io_seg = 8hff;          // turn segments off
+    io_sel = 4hf;           // select no digits
+    
+    /*
+    BUTTON CONDITIONER INPUTS
+    */
+    upb.in = io_button[0];
+    downb.in = io_button[2];
+    leftb.in = io_button[3];
+    rightb.in = io_button[4];
+    
+    /*
+    EDGE DETECTOR INPUTS
+    */
+    up.in = upb.out;
+    down.in = downb.out;
+    left.in = leftb.out;
+    right.in = rightb.out;
+    
+    player_pos.d = player_pos.q;
+    row_selector.d = row_selector.q;
+    
+    /*
+    UP BUTTON PRESSED, TRY TO MOVE TO LED ROW[CURRENT-1]
+    */
+    if(up.out){
+      case(row_selector.q){
+        // row 0, cannot move up
+        b00:
+          player_pos.d = player_pos.q;
+          row_selector.d = row_selector.q;
+        b01:
+          player_pos.d[0] = player_pos.q[1];   // row 0 = row 1 (shift row 1 up)
+          player_pos.d[1] = 8b00000000;
+          row_selector.d = 2b00;
+        b10:
+          player_pos.d[1] = player_pos.q[2];
+          player_pos.d[2] = 8b00000000;
+          row_selector.d = 2b01;
+        default:
+          player_pos.d = player_pos.q;
+          row_selector.d = row_selector.q;
+      }
+    }
+    
+    /*
+    DOWN BUTTON PRESSED, TRY TO MOVE TO LED ROW[CURRENT+1]
+    */
+    if(down.out){
+      case(row_selector.q){
+        b00:
+          player_pos.d[1] = player_pos.q[0];
+          player_pos.d[0] = 8b00000000;
+          row_selector.d = 2b01;
+        b01:
+          player_pos.d[2] = player_pos.q[1];
+          player_pos.d[1] = 8b00000000;
+          row_selector.d = 2b10;
+        b10:
+          player_pos.d = player_pos.q;
+          row_selector.d = row_selector.q;
+        default:
+          player_pos.d = player_pos.q;
+          row_selector.d = row_selector.q;
+      }
+    }
+    
+    /*
+    LEFT BUTTON PRESSED, TRY TO MOVE TO LED+1
+    */
+    if(left.out){
+      case(row_selector.q){
+        b00:
+          checker = player_pos.q[0] << 1;
+          if(checker == 8b0){
+            player_pos.d = player_pos.q;
+            row_selector.d = row_selector.q;
+          }
+          else{
+            player_pos.d[0] = checker;
+          }
+        b01:
+          checker = player_pos.q[1] << 1;
+          if(checker == 8b0){
+            player_pos.d = player_pos.q;
+            row_selector.d = row_selector.q;
+          }
+          else{
+            player_pos.d[1] = checker;
+          }
+        b10:
+          checker = player_pos.q[2] << 1;
+          if(checker == 8b0){
+            player_pos.d = player_pos.q;
+            row_selector.d = row_selector.q;
+          }
+          else{
+            player_pos.d[2] = checker;
+          }
+        b11:
+          player_pos.d = player_pos.q;
+          row_selector.d = row_selector.q;
+      }
+    }
+    
+    /*
+    RIGHT BUTTON PRESSED, TRY TO MOVE TO LED-1
+    */
+    if(right.out){
+      case(row_selector.q){
+        b00:
+          checker = player_pos.q[0] >> 1;
+          if(checker == 8b0){
+            player_pos.d = player_pos.q;
+            row_selector.d = row_selector.q;
+          }
+          else{
+            player_pos.d[0] = checker;
+          }
+        b01:
+          checker = player_pos.q[1] >> 1;
+          if(checker == 8b0){
+            player_pos.d = player_pos.q;
+            row_selector.d = row_selector.q;
+          }
+          else{
+            player_pos.d[1] = checker;
+          }
+        b10:
+          checker = player_pos.q[2] >> 1;
+          if(checker == 8b0){
+            player_pos.d = player_pos.q;
+            row_selector.d = row_selector.q;
+          }
+          else{
+            player_pos.d[2] = checker;
+          }
+        b11:
+          player_pos.d = player_pos.q;
+          row_selector.d = row_selector.q;
+      }
+    }
+    
+    /*
+    LIGHT UP LED ACCORDINGLY
+    */
+    io_led[0] = player_pos.q[0];
+    io_led[1] = player_pos.q[1];
+    io_led[2] = player_pos.q[2];
+  }
+}
