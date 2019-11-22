@@ -5,6 +5,11 @@ Use the IO buttons on the shield (up/down/left/right) to move
 
 The IO LEDs will display "your current position". Right-most row is row 0, so pressing down button will move you "down" to row 1 (middle row)
 
+As seen here, when the right button is pressed, the bit that is lit up shifts to the right
+
+![Repo List](/original.jpg)
+![Repo List](/move_right.jpg)
+
 
 ## Simple Explanation
 For left and right movement, the in-built shift-left and shift-right functions from mojo are used
